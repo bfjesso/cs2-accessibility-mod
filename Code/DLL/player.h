@@ -1,54 +1,63 @@
 #pragma once
 #include "mathstructs.h"
 
-// offsets valid for the February 6th, 2025 game update
-const uintptr_t inMatchOffset = 0x17DF8E8; // offset from client.dll; accessed in client.dll at \xC6\x46\x64\x00\x39\x5E\x28 + 0x4
-const uintptr_t entityListOffset = 0x1B5C6D8;
-const uintptr_t localPlayerOffset = 0x1889F30; // offset from client.dll; accessed in client.dll at \x48\x39\xBE\x80\x01\x00\x00
-const uintptr_t localPlayerViewAnglesOffset = 0x547378; // offset from engine2.dll; accessed in client.dll at \xF2\x0F\x10\x00\xF2\x0F\x11\x46\x0C + 0x4
+// offsets valid for the April 30th, 2026 game update
 
-const unsigned int playerNameOffset = 0x660;
-const unsigned int pawnHandleOffset = 0x80C;
+// controller offsets
+const unsigned int pawnHandleOffset = 0x6BC;
+const unsigned int playerNameOffset = 0x6F0;
+const unsigned int isLocalPlayerOffset = 0x780;
 const int maxPlayerCount = 64;
+const unsigned int bytesBetweenControllers = 0x70;
 
-const unsigned int healthOffset = 0x344;
-const unsigned int velocityOffset = 0x3F0;
-const unsigned int headHeightOffset = 0xBA4;
-const unsigned int teamOffset = 0xE68;
-const unsigned int zoomOffset = 0x131C;
-const unsigned int posOffset = 0x1324;
-const unsigned int rotXOffset = 0x1394;
-const unsigned int rotYOffset = 0x1398;
+// bone offsets
+const unsigned int boneListOffset = 0x1D0;
+const unsigned int bytesPerBone = 0x20;
+const int headBoneIndex = 7;
+
+// player offsets
+const unsigned int gameSceneOffset = 0x330;
+const unsigned int healthOffset = 0x34C;
+const unsigned int velocityOffset = 0x3FC;
+const unsigned int teamOffset = 0xBB0;
+const unsigned int headHeightOffset = 0xD7C;
+const unsigned int pitchOffset = 0x1298;
+const unsigned int yawOffset = 0x129C;
+const unsigned int zoomOffset = 0x1388;
+const unsigned int posOffset = 0x1390;
 
 const float maxHeadHeight = 72;
 
 enum Team
 {
-	Terrorist = 2,
+	Terrorist = 6,
 	CounterTerrorist = 3
 };
 
 struct Player
 {
-	char pad1[healthOffset];
+	char pad1[gameSceneOffset];
+	uintptr_t gameScene;
+	
+	char pad2[healthOffset - gameSceneOffset - sizeof(gameScene)];
 	int health;
 
-	char pad2[velocityOffset - healthOffset - sizeof(health)];
+	char pad3[velocityOffset - healthOffset - sizeof(health)];
 	Vector3 velocity;
 
-	char pad3[headHeightOffset - velocityOffset - sizeof(velocity)];
-	float headHeight;
+	char pad4[teamOffset - velocityOffset - sizeof(velocity)];
+	int team; // 6 = terrorist, 3 = counter terrorist
 
-	char pad4[teamOffset - headHeightOffset - sizeof(headHeight)];
-	int team;
+	char pad5[headHeightOffset - teamOffset - sizeof(team)];
+	float headHeight; // 72 when standing, 54 when crouched
 
-	char pad5[zoomOffset - teamOffset - sizeof(team)];
-	float zoom;
+	char pad6[pitchOffset - headHeightOffset - sizeof(headHeight)];
+	float pitch; // -89 when looking up, 89 when looking down. this seems to only exist for the local player
+	float yaw;
 
-	char pad6[posOffset - zoomOffset - sizeof(zoom)];
+	char pad7[zoomOffset - yawOffset - sizeof(yaw)];
+	float zoom; // 1 when not zoomed, 0.444 first zoom with awp, 0.111 last zoom with awp
+
+	char pad8[posOffset - zoomOffset - sizeof(zoom)];
 	Vector3 pos;
-
-	char pad7[rotXOffset - posOffset - sizeof(pos)];
-	float rotX;
-	float rotY;
 };

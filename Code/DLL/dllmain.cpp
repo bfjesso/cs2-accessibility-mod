@@ -1,7 +1,10 @@
 #include "dllmain.h"
+#include <psapi.h>
 
 uintptr_t clientDll = 0;
 uintptr_t engine2Dll = 0;
+
+uintptr_t entityListOffset = 0;
 
 bool inMatch = false;
 
@@ -42,6 +45,12 @@ DWORD WINAPI Thread(LPVOID param)
 		return 0;
 	}
 
+	if (!UpdateEntityListOffset())
+	{
+		FreeLibraryAndExitThread((HMODULE)param, 0);
+		return 0;
+	}
+
 	Player* aimbotTargetPlayer = nullptr;
 
 	int aimbotTimer = 0;
@@ -56,18 +65,18 @@ DWORD WINAPI Thread(LPVOID param)
 		DWORD aimbotKey = VK_LSHIFT;
 		if (useRightClick) { aimbotKey = VK_RBUTTON; }
 
-		inMatch = *(bool*)(clientDll + inMatchOffset);
+		if (!IsValidPlayer(localPlayer)) 
+		{
+			localPlayer = GetLocalPlayer();
+			continue; 
+		}
+
+		inMatch = localPlayer->gameScene != 0;
 		if (!inMatch) { continue; }
 
 		aimbotTimer++;
 
 		if (!isCursorInWindow || !enableAimbot) { aimbot = false; continue; }
-
-		Player** localPlayerPtr = (Player**)(clientDll + localPlayerOffset);
-		if (localPlayerPtr == nullptr) { localPlayer = nullptr; continue; }
-		localPlayer = *localPlayerPtr;
-
-		if (!IsValidPlayer(localPlayer)) { continue; }
 
 		if (GetAsyncKeyState(aimbotKey) & 1)
 		{
@@ -117,6 +126,55 @@ BOOL WINAPI DllMain(HINSTANCE hModule, DWORD  dwReason, LPVOID lpReserved)
 	}
 
 	return TRUE;
+}
+
+bool UpdateEntityListOffset()
+{
+	// entityListOffset
+	// rax, QWORD PTR [rip+0x2381e52]
+	int entityListSig[25] = { 0x48, 0x8B, 0x05, 0x1000, 0x1000, 0x1000, 0x1000, 0x4C, 0x8D, 0x2D, 0x1000, 0x1000, 0x1000, 0x1000, 0x48, 0x89, 0xBC, 0x24, 0x1000, 0x1000, 0x1000, 0x1000, 0x48, 0x8B, 0x98 };
+	uintptr_t entityListSigAddress = FindClientDLLSig(entityListSig, 25);
+	if (entityListSigAddress == 0) 
+	{
+		return false;
+	}
+	entityListOffset = *(unsigned int*)(entityListSigAddress + 3) + (entityListSigAddress + 7) - clientDll;
+
+	return true;
+}
+
+uintptr_t FindClientDLLSig(int* sig, int sigLen)
+{
+	MODULEINFO modInfo = { 0 };
+	uintptr_t clientSize = GetModuleInformation(GetCurrentProcess(), (HMODULE)clientDll, &modInfo, sizeof(modInfo));
+	for (DWORD i = 0; i < modInfo.SizeOfImage; i++)
+	{
+		bool foundSig = false;
+		for (int j = 0; j < sigLen; j++)
+		{
+			if (sig[j] == 0x1000)
+			{
+				continue;
+			}
+
+			if (*(unsigned char*)(clientDll + i + j) != sig[j])
+			{
+				break;
+			}
+
+			if (j == sigLen - 1)
+			{
+				foundSig = true;
+			}
+		}
+
+		if (foundSig)
+		{
+			return clientDll + i;
+		}
+	}
+
+	return 0;
 }
 
 void Draw() // called in DetourPresent()
@@ -246,11 +304,25 @@ uintptr_t GetPlayerController(int index)
 	if (entityListPtr == nullptr || (*entityListPtr) == 0) { return 0; }
 	uintptr_t entityList = *entityListPtr;
 
-	uintptr_t* playerControllerPtr = (uintptr_t*)(entityList + ((0x78 * index) + 0x78));
+	uintptr_t* playerControllerPtr = (uintptr_t*)(entityList + ((bytesBetweenControllers * index) + bytesBetweenControllers));
 	if (playerControllerPtr == nullptr) { return 0; }
 	uintptr_t playerController = *playerControllerPtr;
 
 	return playerController;
+}
+
+Player* GetLocalPlayer()
+{
+	for (int i = 0; i < maxPlayerCount; i++) 
+	{
+		uintptr_t controller = GetPlayerController(i);
+		if (controller != 0 && *(bool*)(controller + isLocalPlayerOffset))
+		{
+			return GetPlayer(i);
+		}
+	}
+
+	return nullptr;
 }
 
 Player* GetPlayer(int index)
@@ -267,11 +339,11 @@ Player* GetPlayer(int index)
 	if (entitySystemPtr == nullptr || (*entitySystemPtr) == 0) { return 0; }
 	uintptr_t entitySystem = *entitySystemPtr;
 
-	uintptr_t* listEntityPtr = (uintptr_t*)(entitySystem + (0x8 * ((pawnHandle & 0x7FFF) >> 9) + 0x10));
-	if (listEntityPtr == nullptr || (*listEntityPtr) == 0) { return nullptr; }
-	uintptr_t listEntity = *listEntityPtr;
+	uintptr_t* entityListPtr = (uintptr_t*)(entitySystem + 0x10 + (8 * ((pawnHandle & 0x7FFF) >> 9)));
+	if (entityListPtr == nullptr || (*entityListPtr) == 0) { return nullptr; }
+	uintptr_t entityList = *entityListPtr;
 
-	Player** playerPtr = (Player**)(listEntity + (0x78 * (pawnHandle & 0x1FF)));
+	Player** playerPtr = (Player**)(entityList + (bytesBetweenControllers * (pawnHandle & 0x1FF)));
 	if (playerPtr == nullptr || (*playerPtr) == 0) { return nullptr; }
 	Player* player = *playerPtr;
 
@@ -304,26 +376,41 @@ void PredictPosition(Player* targetPlayer, Vector3& out)
 
 	Vector3 velocity = targetPlayer->velocity - (localPlayer->velocity * 2);
 
-	out.x += velocity.x / 30;
-	out.y += velocity.y / 30;
-	out.z += velocity.z / 30;
+	out.x += velocity.x / 35;
+	out.y += velocity.y / 35;
+	out.z += velocity.z / 35;
+}
+
+Vector3 GetPlayerPosition(Player* player, bool getHeadPos)
+{
+	Vector3 result = { 0, 0, 0 };
+
+	if (getHeadPos)
+	{
+		result.x = *(float*)(*(uintptr_t*)(player->gameScene + boneListOffset) + (bytesPerBone * headBoneIndex));
+		result.y = *(float*)(*(uintptr_t*)(player->gameScene + boneListOffset) + (bytesPerBone * headBoneIndex) + 0x4);
+		result.z = *(float*)(*(uintptr_t*)(player->gameScene + boneListOffset) + (bytesPerBone * headBoneIndex) + 0x8) - 72;
+
+		if (player != localPlayer) 
+		{
+			result.z += 3;
+		}
+	}
+	else
+	{
+		result = player->pos;
+		result.z -= 5;
+	}
+
+	return result;
 }
 
 Vector2 GetPlayerScreenPos(Player* player, bool getHeadPos)
 {
 	Vector2 result = {};
 
-	Vector3 localPlayerPos = localPlayer->pos;
-	localPlayerPos.z += localPlayer->headHeight - maxHeadHeight;
-
-	Vector3 targetPlayerPos = player->pos;
-	if (getHeadPos)
-	{
-		targetPlayerPos.z += player->headHeight - maxHeadHeight + 2;
-		targetPlayerPos.x += player->rotX * 10;
-		targetPlayerPos.y += player->rotY * 4;
-	}
-	else { targetPlayerPos.z -= 4; }
+	Vector3 localPlayerPos = GetPlayerPosition(localPlayer, true);
+	Vector3 targetPlayerPos = GetPlayerPosition(player, getHeadPos);
 
 	PredictPosition(player, targetPlayerPos);
 
@@ -334,11 +421,8 @@ Vector2 GetPlayerScreenPos(Player* player, bool getHeadPos)
 	float pitchToPlayer = -(asin((targetPlayerPos.z - localPlayerPos.z) / distance) * rToD);
 	float yawToPlayer = (atan2(targetPlayerPos.y - localPlayerPos.y, targetPlayerPos.x - localPlayerPos.x) * rToD);
 
-	float localPlayerPitch = *(float*)(engine2Dll + localPlayerViewAnglesOffset);
-	float localPlayerYaw = *(float*)(engine2Dll + localPlayerViewAnglesOffset + sizeof(float));
-
-	float relativePitch = pitchToPlayer - localPlayerPitch;
-	float relativeYaw = localPlayerYaw - yawToPlayer;
+	float relativePitch = pitchToPlayer - localPlayer->pitch;
+	float relativeYaw = localPlayer->yaw - yawToPlayer;
 
 	if (relativeYaw > 180) { relativeYaw = -(360 - relativeYaw); }
 	if (relativeYaw < -180) { relativeYaw = (360 + relativeYaw); }
@@ -398,19 +482,16 @@ Player* GetClosestPlayer()
 
 void MoveViewAngles(float targetPitch, float targetYaw, float speed, bool useTolerance)
 {
-	INPUT input;
+	INPUT input = { 0 };
 	input.type = INPUT_MOUSE;
-	MOUSEINPUT mouseInput;
+	MOUSEINPUT mouseInput = { 0 };
 	mouseInput.dwFlags = MOUSEEVENTF_MOVE;
 
-	float localPlayerPitch = *(float*)(engine2Dll + localPlayerViewAnglesOffset);
-	float localPlayerYaw = *(float*)(engine2Dll + localPlayerViewAnglesOffset + sizeof(float));
+	float deltaPitch = targetPitch - localPlayer->pitch;
+	float deltaYaw = localPlayer->yaw - targetYaw;
 
-	float deltaPitch = targetPitch - localPlayerPitch;
-	float deltaYaw = localPlayerYaw - targetYaw;
-
-	if (deltaYaw > 180) { deltaYaw = -(360 - deltaYaw); }
-	if (deltaYaw < -180) { deltaYaw = (360 + deltaYaw); }
+	if (deltaYaw > 180) { deltaYaw -= 360; }
+	if (deltaYaw < -180) { deltaYaw += 360; }
 
 	float deltaY = deltaPitch * speed;
 	float deltaX = deltaYaw * speed;
@@ -435,16 +516,8 @@ void MoveViewAngles(float targetPitch, float targetYaw, float speed, bool useTol
 
 void Aimbot(Player* targetPlayer)
 {
-	Vector3 localPlayerPos = localPlayer->pos;
-	localPlayerPos.z += localPlayer->headHeight - maxHeadHeight;
-
-	Vector3 targetPlayerPos = targetPlayer->pos;
-	targetPlayerPos.z += targetPlayer->headHeight - (headShots ? maxHeadHeight - 1 : 90);
-	if (headShots)
-	{
-		targetPlayerPos.x += targetPlayer->rotX * 4;
-		targetPlayerPos.y += targetPlayer->rotY * 4;
-	}
+	Vector3 localPlayerPos = GetPlayerPosition(localPlayer, true);
+	Vector3 targetPlayerPos = GetPlayerPosition(targetPlayer, headShots);
 
 	PredictPosition(targetPlayer, targetPlayerPos);
 
