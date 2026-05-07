@@ -27,7 +27,7 @@ bool headShots = true;
 bool targetClosestToCrosshair = true;
 float aimbotStrength = 10;
 
-bool esp = false;
+bool esp = true;
 bool showPlayerNames = true;
 bool hideEspInfo = true;
 bool enableCrosshair = true;
@@ -72,7 +72,11 @@ DWORD WINAPI Thread(LPVOID param)
 		}
 
 		inMatch = localPlayer->gameScene != 0;
-		if (!inMatch) { continue; }
+		if (!inMatch) 
+		{ 
+			localPlayer = GetLocalPlayer();
+			continue; 
+		}
 
 		aimbotTimer++;
 
@@ -374,11 +378,11 @@ void PredictPosition(Player* targetPlayer, Vector3& out)
 {
 	if (!IsValidPlayer(localPlayer) || !IsValidPlayer(targetPlayer)) { return; }
 
-	Vector3 velocity = targetPlayer->velocity - (localPlayer->velocity * 2);
+	Vector3 velocity = targetPlayer->velocity - localPlayer->velocity;
 
-	out.x += velocity.x / 35;
-	out.y += velocity.y / 35;
-	out.z += velocity.z / 35;
+	out.x += velocity.x / 50;
+	out.y += velocity.y / 50;
+	out.z += velocity.z / 50;
 }
 
 Vector3 GetPlayerPosition(Player* player, bool getHeadPos)
